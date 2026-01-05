@@ -40,22 +40,31 @@ Comprehensive feedback including:
 
 ## 🏗️ Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         FRONTEND                            │
-│  Next.js 15 • TypeScript • Tailwind CSS • ShadCN UI         │
-│  Monaco Editor • Framer Motion • Vapi Web SDK               │
-├─────────────────────────────────────────────────────────────┤
-│                          ▼  API                             │
-├─────────────────────────────────────────────────────────────┤
-│                         BACKEND                             │
-│  Express • TypeScript • MongoDB • Redis                     │
-│  Vapi Server SDK • Groq LLM                                 │
-├─────────────────────────────────────────────────────────────┤
-│                      AI SERVICES                            │
-│  Vapi (Orchestration) • Deepgram (STT) • ElevenLabs (TTS)   │
-│  Groq (Llama 3.3 70B for evaluation)                        │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Frontend["🖥️ Frontend"]
+        A["Next.js 15 • TypeScript"]
+        B["Tailwind CSS • ShadCN UI"]
+        C["Monaco Editor • Framer Motion"]
+        D["Vapi Web SDK"]
+    end
+    
+    subgraph Backend["⚙️ Backend"]
+        E["Express • TypeScript"]
+        F["MongoDB • Redis"]
+        G["Vapi Server SDK • Groq LLM"]
+    end
+    
+    subgraph AI["🤖 AI Services"]
+        H["Vapi - Voice Orchestration"]
+        I["Deepgram - Speech-to-Text"]
+        J["ElevenLabs - Text-to-Speech"]
+        K["Groq - Llama 3.3 70B"]
+    end
+    
+    Frontend -->|REST API| Backend
+    Backend --> AI
+    AI -->|Real-time Voice| Frontend
 ```
 
 ---
@@ -201,22 +210,28 @@ GROQ_API_KEY=gsk_your_groq_api_key_here
 
 ## 📖 Usage Flow
 
-```
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│                  │     │                  │     │                  │
-│   Landing Page   │────▶│ Interview Session│────▶│  Results Page    │
-│                  │     │                  │     │                  │
-│  "Start Interview"     │  • Write code    │     │  • Score (1-10)  │
-│                  │     │  • Talk to AI    │     │  • Strengths     │
-│                  │     │  • Get feedback  │     │  • Improvements  │
-│                  │     │                  │     │  • Edge cases    │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-                              │
-                              ▼
-                         Click "End Call"
-                              │
-                              ▼
-                    LLM evaluates code + transcript
+```mermaid
+flowchart LR
+    A["🏠 Landing Page"] -->|Click Start| B["🎤 Interview Session"]
+    B -->|Click End Call| C["📊 Results Page"]
+    
+    subgraph Interview[" "]
+        B
+        D["Write Code"]
+        E["Talk to AI"]
+        F["Get Feedback"]
+    end
+    
+    subgraph Results[" "]
+        C
+        G["Score 1-10"]
+        H["Strengths"]
+        I["Improvements"]
+        J["Edge Cases"]
+    end
+    
+    B --> D & E & F
+    C --> G & H & I & J
 ```
 
 ---
