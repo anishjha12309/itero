@@ -76,7 +76,16 @@ Be specific, constructive, and encouraging. Focus on actionable feedback.`;
     }
 
     console.log('JSON extracted, parsing...');
-    const evaluation: IEvaluation = JSON.parse(jsonMatch[0]);
+    
+    // Sanitize JSON: Remove control characters that break parsing
+    const cleanJson = jsonMatch[0]
+      .replace(/[\x00-\x1F\x7F]/g, ' ') // Replace control chars with space
+      .replace(/\n/g, ' ')              // Replace newlines
+      .replace(/\r/g, ' ')              // Replace carriage returns
+      .replace(/\t/g, ' ')              // Replace tabs
+      .replace(/\s+/g, ' ');            // Collapse multiple spaces
+    
+    const evaluation: IEvaluation = JSON.parse(cleanJson);
     console.log('Evaluation parsed successfully, score:', evaluation.overallScore);
     
     // Validate and sanitize the evaluation
