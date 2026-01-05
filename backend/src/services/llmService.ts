@@ -77,25 +77,54 @@ Be specific, constructive, and encouraging. Focus on actionable feedback.`;
 
     console.log('JSON extracted, parsing...');
     
-    // Sanitize JSON: Remove control characters that break parsing
-    const cleanJson = jsonMatch[0]
-      .replace(/[\x00-\x1F\x7F]/g, ' ') // Replace control chars with space
-      .replace(/\n/g, ' ')              // Replace newlines
-      .replace(/\r/g, ' ')              // Replace carriage returns
-      .replace(/\t/g, ' ')              // Replace tabs
-      .replace(/\s+/g, ' ');            // Collapse multiple spaces
+    // Robust JSON sanitization for LLM responses
+    let cleanJson = jsonMatch[0]
+      // Remove control characters (except inside strings, but this is aggressive)
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+      // Fix common LLM JSON issues
+      .replace(/,\s*}/g, '}')           // Remove trailing commas before }
+      .replace(/,\s*]/g, ']')           // Remove trailing commas before ]
+      .replace(/"\s*\n\s*"/g, '" "')    // Fix split strings
+      .replace(/\n/g, ' ')              // Replace newlines with space
+      .replace(/\r/g, '')               // Remove carriage returns
+      .replace(/\t/g, ' ');             // Replace tabs with space
     
-    const evaluation: IEvaluation = JSON.parse(cleanJson);
+    let evaluation: IEvaluation;
+    try {
+      evaluation = JSON.parse(cleanJson);
+    } catch (parseError) {
+      console.error('First parse attempt failed, trying aggressive cleanup...');
+      // More aggressive cleanup for stubborn cases
+      cleanJson = cleanJson
+        .replace(/\\"/g, "'")           // Replace escaped quotes with single quotes
+        .replace(/\s+/g, ' ')           // Collapse whitespace
+        .replace(/([{,])\s*(\w+)\s*:/g, '$1"$2":'); // Quote unquoted keys
+      
+      evaluation = JSON.parse(cleanJson);
+    }
+    
     console.log('Evaluation parsed successfully, score:', evaluation.overallScore);
     
-    // Validate and sanitize the evaluation
+    // Validate and sanitize the evaluation - ensure arrays are arrays
+    const ensureArray = (val: unknown): string[] => {
+      if (Array.isArray(val)) return val.map(String);
+      if (typeof val === 'string') return [val];
+      return [];
+    };
+    
     return {
-      overallScore: Math.min(10, Math.max(1, evaluation.overallScore || 5)),
-      strengths: evaluation.strengths || ['Good attempt at solving the problem'],
-      improvements: evaluation.improvements || ['Consider practicing more problems'],
-      missingEdgeCases: evaluation.missingEdgeCases || [],
-      nextSteps: evaluation.nextSteps || ['Keep practicing!'],
-      codeReview: evaluation.codeReview || 'Code submitted for review.',
+      overallScore: Math.min(10, Math.max(1, Number(evaluation.overallScore) || 5)),
+      strengths: ensureArray(evaluation.strengths).length > 0 
+        ? ensureArray(evaluation.strengths) 
+        : ['Good attempt at solving the problem'],
+      improvements: ensureArray(evaluation.improvements).length > 0 
+        ? ensureArray(evaluation.improvements)
+        : ['Consider practicing more problems'],
+      missingEdgeCases: ensureArray(evaluation.missingEdgeCases),
+      nextSteps: ensureArray(evaluation.nextSteps).length > 0 
+        ? ensureArray(evaluation.nextSteps)
+        : ['Keep practicing!'],
+      codeReview: String(evaluation.codeReview || 'Code submitted for review.'),
     };
   } catch (error) {
     console.error('=== LLM EVALUATION ERROR ===');
