@@ -98,6 +98,19 @@ export function useVapi(options: UseVapiOptions = {}) {
     }
   }, [isMuted]);
 
+  // Send a message for the agent to speak aloud
+  const say = useCallback((message: string) => {
+    if (vapiRef.current && isConnected) {
+      vapiRef.current.send({
+        type: 'add-message',
+        message: {
+          role: 'system',
+          content: message,
+        },
+      });
+    }
+  }, [isConnected]);
+
   return {
     isConnected,
     isMuted,
@@ -106,5 +119,6 @@ export function useVapi(options: UseVapiOptions = {}) {
     startCall,
     endCall,
     toggleMute,
+    say,
   };
 }

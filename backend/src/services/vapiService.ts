@@ -46,8 +46,8 @@ export async function createVapiAssistant(sessionId: string): Promise<VapiAssist
       language: 'en',
     },
     firstMessage: "Hello! I'm Sarah, your AI interviewer today. Welcome to your coding interview practice. I'll give you a problem to solve, and I'd like you to explain your thinking as you work through it. Ready to start?",
-    silenceTimeoutSeconds: 30,
-    maxDurationSeconds: 1800,
+    silenceTimeoutSeconds: 360,
+    maxDurationSeconds: 1600,
   };
 
   try {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, Suspense } from "react";
+import { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CodeEditor } from "@/components/interview/CodeEditor";
 import { LiveTranscripts } from "@/components/interview/LiveTranscripts";
@@ -50,13 +50,40 @@ function InterviewContent() {
     isConnected,
     isSpeaking,
     isListening,
+    say,
   } = useVapi({
-    onTranscriptUpdate: addTranscript,
+    onTranscriptUpdate: (entry) => {
+      addTranscript(entry);
+      // Reset timers when user speaks
+      if (entry.role === 'user') {
+        lastSpeechTime.current = Date.now();
+        lastPromptType.current = null;
+      }
+    },
     onCallEnd: () => console.log("Call ended via Vapi event")
   });
 
   const [hasStarted, setHasStarted] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const initialized = useRef(false);
+  const sessionStartTime = useRef<number>(0);
+  
+  // Activity tracking refs
+  const lastSpeechTime = useRef(Date.now());
+  const lastTypingTime = useRef(0);
+  const lastPromptType = useRef<string | null>(null);
+
+  // Session timer
+  useEffect(() => {
+    if (!hasStarted) return;
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - sessionStartTime.current) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [hasStarted]);
+
+  // Format time as MM:SS
+  const formattedTime = `${Math.floor(elapsedSeconds / 60).toString().padStart(2, '0')}:${(elapsedSeconds % 60).toString().padStart(2, '0')}`;
 
   useEffect(() => {
     if (initialized.current) return;
@@ -68,6 +95,8 @@ function InterviewContent() {
             if (data && data.assistantId) {
                 await startCall(data.assistantId);
                 setHasStarted(true);
+                sessionStartTime.current = Date.now();
+                lastSpeechTime.current = Date.now();
             }
         } catch (e) {
             console.error("Failed to init interview", e);
@@ -80,6 +109,44 @@ function InterviewContent() {
       endCall();
     };
   }, []);
+
+  // Interactive prompts - agent speaks them aloud
+  useEffect(() => {
+    if (!isConnected || !hasStarted) return;
+
+    const checkActivity = () => {
+      const now = Date.now();
+      const timeSinceSpeech = now - lastSpeechTime.current;
+      const timeSinceTyping = now - lastTypingTime.current;
+      const isTypingRecently = timeSinceTyping < 5000 && timeSinceTyping > 0;
+
+      // Don't interrupt if agent is speaking
+      if (isSpeaking) return;
+
+      // Prompt 1: Typing for 30s without speaking - remind to think aloud
+      if (isTypingRecently && timeSinceSpeech > 30000 && lastPromptType.current !== 'typing') {
+        say("Hey, I noticed you're coding. Feel free to think out loud so I can follow your approach!");
+        lastPromptType.current = 'typing';
+        return;
+      }
+
+      // Prompt 2: 60s idle - offer hint
+      if (timeSinceSpeech > 60000 && lastPromptType.current !== 'idle') {
+        say("Would you like a hint, or should I rephrase the question?");
+        lastPromptType.current = 'idle';
+        return;
+      }
+    };
+
+    const interval = setInterval(checkActivity, 5000);
+    return () => clearInterval(interval);
+  }, [isConnected, hasStarted, isSpeaking, say]);
+
+  // Track typing activity
+  const handleCodeChangeWithTracking = useCallback((newCode: string) => {
+    handleCodeChange(newCode);
+    lastTypingTime.current = Date.now();
+  }, [handleCodeChange]);
 
   const handleEndSession = async () => {
     endCall();
@@ -102,7 +169,7 @@ function InterviewContent() {
     <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] p-0 md:p-0">
        {/* Left Panel: Code Editor */}
        <div className="flex-1 md:flex-[3] h-full flex flex-col border-r border-border">
-            <CodeEditor code={code} onChange={(val) => handleCodeChange(val || "")} />
+            <CodeEditor code={code} onChange={(val) => handleCodeChangeWithTracking(val || "")} />
        </div>
 
        {/* Right Panel: Sidebar */}
@@ -116,9 +183,10 @@ function InterviewContent() {
                 />
             </div>
             <div className="flex-1 min-h-0 p-4">
-                <LiveTranscripts transcripts={transcript} />
+                <LiveTranscripts transcripts={transcript} elapsedTime={formattedTime} />
             </div>
        </div>
     </div>
   );
 }
+

@@ -3,4 +3,5 @@ export interface TranscriptEntry {
   role: 'agent' | 'user';
   content: string;
   timestamp: Date;
+  isSystemMessage?: boolean;
 }
