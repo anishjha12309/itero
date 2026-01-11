@@ -14,17 +14,18 @@ import time
 from typing import Optional
 
 from dotenv import load_dotenv
+load_dotenv()
+
 from livekit import agents, rtc
-from livekit.agents import AgentSession, Agent
-from livekit.plugins import deepgram, silero, openai
+from livekit.agents import AgentSession, Agent, function_tool, RunContext
+from livekit.plugins import deepgram, silero, openai, groq
 
 try:
     from livekit.plugins import elevenlabs
-    USE_ELEVENLABS = True
+    # Check both possible env var names
+    USE_ELEVENLABS = bool(os.getenv("ELEVEN_API_KEY") or os.getenv("ELEVENLABS_API_KEY"))
 except ImportError:
     USE_ELEVENLABS = False
-
-load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("interview-agent")
@@ -94,9 +95,12 @@ def get_interviewer_prompt(problem: dict) -> str:
 ## Problem: {problem['name']} ({problem['difficulty']})
 {problem['description']}
 
-## You Can See the Candidate's Code
-You have real-time access to the candidate's code. When they ask about their code,
-you will see it in the context. Reference it specifically when discussing their solution.
+## Your Tools
+You have access to these tools to help with the interview:
+- `get_current_code`: Call this to see the candidate's current code when they ask about it
+- `analyze_code_approach`: Call this to analyze their code structure and approach
+
+Use these tools when the candidate asks about their code or wants feedback.
 
 ## Solution (FOR YOUR GUIDANCE ONLY - NEVER REVEAL)
 {problem['expected_approach']}
@@ -125,6 +129,70 @@ class InterviewerAgent(Agent):
         """Updates agent's current code state."""
         self.current_code = code
         logger.info(f"[CODE_SYNC] Updated code ({len(code)} chars)")
+    
+    @function_tool()
+    async def get_current_code(
+        self,
+        context: RunContext,
+        include_line_numbers: bool = False,
+    ) -> str:
+        """
+        Retrieve the candidate's current code from the editor.
+        Call this when you need to see what the candidate has written,
+        or when they ask you to review their code.
+        
+        Args:
+            include_line_numbers: Whether to include line numbers in the output (default: False)
+        
+        Returns:
+            The current code in the candidate's editor.
+        """
+        if not self.current_code.strip():
+            return "(No code written yet)"
+        code = get_code_context(self.current_code)
+        if include_line_numbers:
+            lines = code.split('\n')
+            code = '\n'.join(f"{i+1}: {line}" for i, line in enumerate(lines))
+        return code
+    
+    @function_tool()
+    async def analyze_code_approach(
+        self,
+        context: RunContext,
+        check_complexity: bool = False,
+    ) -> dict:
+        """
+        Analyze the candidate's current code to understand their approach.
+        Call this when you want to evaluate their solution strategy.
+        
+        Args:
+            check_complexity: Whether to include complexity analysis (default: False)
+        
+        Returns:
+            Analysis of the code including line count and basic structure info.
+        """
+        code = self.current_code
+        if not code.strip():
+            return {"status": "no_code", "message": "Candidate hasn't written any code yet"}
+        
+        lines = code.strip().split('\n')
+        has_function = any('def ' in line or 'function ' in line for line in lines)
+        has_loop = any(keyword in code for keyword in ['for ', 'while ', 'forEach', '.map('])
+        has_conditional = any(keyword in code for keyword in ['if ', 'else:', 'else {'])
+        
+        result = {
+            "status": "has_code",
+            "line_count": len(lines),
+            "has_function_definition": has_function,
+            "has_loop": has_loop,
+            "has_conditional": has_conditional,
+            "code_preview": get_code_context(code, max_lines=15)
+        }
+        
+        if check_complexity:
+            result["estimated_complexity"] = "O(n^2)" if has_loop and code.count('for ') > 1 else "O(n)"
+        
+        return result
     
     async def on_user_turn_completed(self, turn_ctx, new_message):
         """
@@ -222,11 +290,11 @@ async def entrypoint(ctx: agents.JobContext):
     
     # AI pipeline: STT -> LLM -> TTS
     stt = deepgram.STT(model="nova-2", language="en")
-    tts = elevenlabs.TTS(voice_id="EXAVITQu4vr4xnSDxMaL") if USE_ELEVENLABS else openai.TTS(voice="nova")
-    llm = openai.LLM(
-        base_url="https://api.groq.com/openai/v1",
-        api_key=os.getenv("GROQ_API_KEY"),
+    eleven_key = os.getenv("ELEVEN_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
+    tts = elevenlabs.TTS(api_key=eleven_key, voice_id="EXAVITQu4vr4xnSDxMaL") if USE_ELEVENLABS else openai.TTS(voice="nova")
+    llm = groq.LLM(
         model="llama-3.3-70b-versatile",
+        api_key=os.getenv("GROQ_API_KEY"),
     )
     
     _interviewer_agent = InterviewerAgent()
