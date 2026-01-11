@@ -95,7 +95,8 @@ def get_interviewer_prompt(problem: dict) -> str:
 {problem['description']}
 
 ## You Can See the Candidate's Code
-React naturally to code changes - acknowledge progress, ask about approach.
+You have real-time access to the candidate's code. When they ask about their code,
+you will see it in the context. Reference it specifically when discussing their solution.
 
 ## Solution (FOR YOUR GUIDANCE ONLY - NEVER REVEAL)
 {problem['expected_approach']}
@@ -119,15 +120,37 @@ class InterviewerAgent(Agent):
         self.last_code_comment_time = 0
         self.last_user_activity_time = time.time()
         self.last_nudge_time = time.time()
+    
+    def update_code_context(self, code: str):
+        """Updates agent's current code state."""
+        self.current_code = code
+        logger.info(f"[CODE_SYNC] Updated code ({len(code)} chars)")
+    
+    async def on_user_turn_completed(self, turn_ctx, new_message):
+        """
+        Called after user finishes speaking, before LLM generates response.
+        Injects current code context into the user's message for real-time awareness.
+        """
+        # Only inject if we have code and user is asking about it
+        if self.current_code.strip():
+            code_context = f"\n\n[CURRENT CODE IN EDITOR]\n```\n{get_code_context(self.current_code)}\n```"
+            
+            # Append code context to the user's message
+            if hasattr(new_message, 'content') and isinstance(new_message.content, str):
+                new_message.content += code_context
+                logger.info("[CODE_SYNC] Injected code context into user turn")
+        
+        # Call parent to continue normal flow
+        return await super().on_user_turn_completed(turn_ctx, new_message)
 
 
 _interviewer_agent: Optional[InterviewerAgent] = None
 
 
 async def handle_code_update(code: str, session: AgentSession, agent: InterviewerAgent):
-    """Comments on significant code changes with 30s cooldown."""
+    """Updates agent with current code and optionally comments on significant changes."""
     agent.previous_code = agent.current_code
-    agent.current_code = code
+    agent.update_code_context(code)  # Always sync code to agent instructions
     agent.last_user_activity_time = time.time()
     
     diff_info = compute_code_diff(agent.previous_code, code)
