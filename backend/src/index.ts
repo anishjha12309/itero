@@ -1,4 +1,7 @@
-// Load environment variables FIRST, before any other imports
+/**
+ * Itero Backend Server
+ * Express API handling interview lifecycle, LiveKit coordination, and LLM evaluation.
+ */
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -12,7 +15,7 @@ import evaluateRoutes from './routes/evaluate';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// CORS: Allow frontend origins (localhost + production)
 const allowedOrigins = [
   'http://localhost:3000',
   'https://itero-olive.vercel.app',
@@ -21,57 +24,50 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or Postman)
     if (!origin) return callback(null, true);
-    
-    // Check if origin is allowed (strip trailing slash for comparison)
     const cleanOrigin = origin.replace(/\/$/, '');
     const isAllowed = allowedOrigins.some(allowed => 
       allowed && cleanOrigin === allowed.replace(/\/$/, '')
     );
-    
     if (isAllowed) {
       callback(null, true);
     } else {
       console.log('CORS blocked origin:', origin);
-      callback(null, true); // Allow anyway for now, but log it
+      callback(null, true); // Log but allow for debugging
     }
   },
   credentials: true,
 }));
 app.use(express.json());
 
-// Request logging
+// Request logging middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
 });
 
-// Health check
+// Health check for uptime monitoring
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Routes
+// Route mounting
 app.use('/api/interview', interviewRoutes);
 app.use('/api/evaluate', evaluateRoutes);
 app.use('/api/results', evaluateRoutes);
 
-// Error handling middleware
+// Global error handler
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   console.error('Error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// 404 handler
 app.use((req: Request, res: Response) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-// Start server
 async function startServer() {
   try {
-    // Connect to databases
     await connectDatabase();
     await connectRedis();
 

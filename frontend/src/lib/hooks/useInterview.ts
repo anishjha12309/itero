@@ -1,24 +1,40 @@
 'use client';
 
+/**
+ * Interview Session Hook
+ * Manages interview lifecycle state: session ID, code, transcript, and LiveKit credentials.
+ */
+
 import { useState, useCallback } from 'react';
 import { TranscriptEntry } from '@/types';
 import { startInterview as apiStartInterview, endInterview as apiEndInterview, updateCode } from '@/lib/api';
 
+interface LiveKitCredentials {
+  livekitToken: string;
+  livekitUrl: string;
+  roomName: string;
+}
+
 export function useInterview() {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [assistantId, setAssistantId] = useState<string | null>(null);
+  const [livekitCredentials, setLivekitCredentials] = useState<LiveKitCredentials | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [code, setCode] = useState('// Write your solution here\n\nfunction solution() {\n  \n}\n');
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  /** Initializes a new interview session and retrieves LiveKit credentials. */
   const startInterview = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const response = await apiStartInterview();
       setSessionId(response.sessionId);
-      setAssistantId(response.assistantId);
+      setLivekitCredentials({
+        livekitToken: response.livekitToken,
+        livekitUrl: response.livekitUrl,
+        roomName: response.roomName,
+      });
       return response;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start interview';
@@ -29,9 +45,9 @@ export function useInterview() {
     }
   }, []);
 
+  /** Ends the session and triggers evaluation. */
   const endInterviewSession = useCallback(async () => {
     if (!sessionId) return;
-    
     setIsLoading(true);
     try {
       await apiEndInterview(sessionId, code, transcript);
@@ -42,9 +58,9 @@ export function useInterview() {
     }
   }, [sessionId, code, transcript]);
 
+  /** Updates code locally and persists to backend. */
   const handleCodeChange = useCallback((newCode: string) => {
     setCode(newCode);
-    // Debounce code updates to backend
     if (sessionId) {
       updateCode(sessionId, newCode).catch(console.error);
     }
@@ -56,7 +72,7 @@ export function useInterview() {
 
   const resetInterview = useCallback(() => {
     setSessionId(null);
-    setAssistantId(null);
+    setLivekitCredentials(null);
     setCode('// Write your solution here\n\nfunction solution() {\n  \n}\n');
     setTranscript([]);
     setError(null);
@@ -64,7 +80,7 @@ export function useInterview() {
 
   return {
     sessionId,
-    assistantId,
+    livekitCredentials,
     isLoading,
     code,
     transcript,

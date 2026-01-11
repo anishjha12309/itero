@@ -6,7 +6,7 @@ import { CodeEditor } from "@/components/interview/CodeEditor";
 import { LiveTranscripts } from "@/components/interview/LiveTranscripts";
 import { AgentControls } from "@/components/interview/AgentControls";
 import { useInterview } from "@/lib/hooks/useInterview";
-import { useVapi } from "@/lib/hooks/useVapi";
+import { useLiveKit } from "@/lib/hooks/useLiveKit";
 import { Navbar } from "@/components/layout/Navbar";
 import { Loader2 } from "lucide-react";
 
@@ -50,17 +50,16 @@ function InterviewContent() {
     isConnected,
     isSpeaking,
     isListening,
-    say,
-  } = useVapi({
+    sendCode,
+  } = useLiveKit({
     onTranscriptUpdate: (entry) => {
       addTranscript(entry);
       // Reset timers when user speaks
       if (entry.role === 'user') {
         lastSpeechTime.current = Date.now();
-        lastPromptType.current = null;
       }
     },
-    onCallEnd: () => console.log("Call ended via Vapi event")
+    onCallEnd: () => console.log("Call ended via LiveKit event")
   });
 
   const [hasStarted, setHasStarted] = useState(false);
@@ -71,7 +70,7 @@ function InterviewContent() {
   // Activity tracking refs
   const lastSpeechTime = useRef(Date.now());
   const lastTypingTime = useRef(0);
-  const lastPromptType = useRef<string | null>(null);
+  const lastCodeSent = useRef("");
 
   // Session timer
   useEffect(() => {
@@ -92,8 +91,13 @@ function InterviewContent() {
     const initCallback = async () => {
         try {
             const data = await startInterview();
-            if (data && data.assistantId) {
-                await startCall(data.assistantId);
+            // LiveKit returns token, url, and roomName
+            if (data && data.livekitToken) {
+                await startCall({
+                  token: data.livekitToken,
+                  url: data.livekitUrl,
+                  roomName: data.roomName,
+                });
                 setHasStarted(true);
                 sessionStartTime.current = Date.now();
                 lastSpeechTime.current = Date.now();
@@ -110,37 +114,20 @@ function InterviewContent() {
     };
   }, []);
 
-  // Interactive prompts - agent speaks them aloud
+  // Send code updates to agent (debounced)
   useEffect(() => {
     if (!isConnected || !hasStarted) return;
-
-    const checkActivity = () => {
-      const now = Date.now();
-      const timeSinceSpeech = now - lastSpeechTime.current;
-      const timeSinceTyping = now - lastTypingTime.current;
-      const isTypingRecently = timeSinceTyping < 5000 && timeSinceTyping > 0;
-
-      // Don't interrupt if agent is speaking
-      if (isSpeaking) return;
-
-      // Prompt 1: Typing for 30s without speaking - remind to think aloud
-      if (isTypingRecently && timeSinceSpeech > 30000 && lastPromptType.current !== 'typing') {
-        say("Hey, I noticed you're coding. Feel free to think out loud so I can follow your approach!");
-        lastPromptType.current = 'typing';
-        return;
+    
+    // Debounce: only send if code changed significantly and after 1.5 seconds of no changes
+    const timeoutId = setTimeout(() => {
+      if (code !== lastCodeSent.current && code.length > 20) {
+        sendCode(code, 'javascript');
+        lastCodeSent.current = code;
       }
+    }, 1500);
 
-      // Prompt 2: 60s idle - offer hint
-      if (timeSinceSpeech > 60000 && lastPromptType.current !== 'idle') {
-        say("Would you like a hint, or should I rephrase the question?");
-        lastPromptType.current = 'idle';
-        return;
-      }
-    };
-
-    const interval = setInterval(checkActivity, 5000);
-    return () => clearInterval(interval);
-  }, [isConnected, hasStarted, isSpeaking, say]);
+    return () => clearTimeout(timeoutId);
+  }, [code, isConnected, hasStarted, sendCode]);
 
   // Track typing activity
   const handleCodeChangeWithTracking = useCallback((newCode: string) => {
@@ -189,4 +176,3 @@ function InterviewContent() {
     </div>
   );
 }
-

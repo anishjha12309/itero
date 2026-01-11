@@ -5,13 +5,15 @@ let groqClient: Groq | null = null;
 
 function getGroqClient(): Groq {
   if (!groqClient) {
-    groqClient = new Groq({
-      apiKey: process.env.GROQ_API_KEY || '',
-    });
+    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
   }
   return groqClient;
 }
 
+/**
+ * Evaluates interview performance using Groq LLM.
+ * Analyzes transcript, code quality, and problem-solving approach.
+ */
 export async function evaluateInterview(interview: IInterview): Promise<IEvaluation> {
   const transcriptText = interview.transcript
     .map((t) => `${t.role === 'agent' ? 'Interviewer' : 'Candidate'}: ${t.content}`)
@@ -43,75 +45,52 @@ Please provide a comprehensive evaluation in the following JSON format:
 Be specific, constructive, and encouraging. Focus on actionable feedback.`;
 
   try {
-    console.log('Calling Groq API for evaluation...');
-    console.log('Interview data - Code length:', interview.code?.length || 0);
-    console.log('Interview data - Transcript entries:', interview.transcript?.length || 0);
-    
     const completion = await getGroqClient().chat.completions.create({
-      model: 'llama-3.3-70b-versatile', // Currently available model
+      model: 'llama-3.3-70b-versatile',
       messages: [
-        {
-          role: 'system',
-          content: 'You are an expert technical interviewer. Respond only with valid JSON.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
+        { role: 'system', content: 'You are an expert technical interviewer. Respond only with valid JSON.' },
+        { role: 'user', content: prompt },
       ],
       temperature: 0.7,
       max_tokens: 2000,
     });
 
     const responseText = completion.choices[0]?.message?.content || '';
-    console.log('Groq evaluation response received, length:', responseText.length);
-    console.log('Groq raw response:', responseText.substring(0, 500)); // Log first 500 chars
     
-    // Extract JSON from response (handle markdown code blocks)
+    // Extract and parse JSON from LLM response
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      console.error('Failed to parse evaluation response - no JSON found');
-      console.error('Full response:', responseText);
-      throw new Error('Failed to parse evaluation response');
+      throw new Error('No JSON found in LLM response');
     }
 
-    console.log('JSON extracted, parsing...');
-    
-    // Robust JSON sanitization for LLM responses
-    let cleanJson = jsonMatch[0]
-      // Remove control characters (except inside strings, but this is aggressive)
+    // Sanitize common LLM JSON issues
+    const cleanJson = jsonMatch[0]
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-      // Fix common LLM JSON issues
-      .replace(/,\s*}/g, '}')           // Remove trailing commas before }
-      .replace(/,\s*]/g, ']')           // Remove trailing commas before ]
-      .replace(/"\s*\n\s*"/g, '" "')    // Fix split strings
-      .replace(/\n/g, ' ')              // Replace newlines with space
-      .replace(/\r/g, '')               // Remove carriage returns
-      .replace(/\t/g, ' ');             // Replace tabs with space
-    
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*]/g, ']')
+      .replace(/\n/g, ' ')
+      .replace(/\r/g, '')
+      .replace(/\t/g, ' ');
+
     let evaluation: IEvaluation;
     try {
       evaluation = JSON.parse(cleanJson);
-    } catch (parseError) {
-      console.error('First parse attempt failed, trying aggressive cleanup...');
-      // More aggressive cleanup for stubborn cases
-      cleanJson = cleanJson
-        .replace(/\\"/g, "'")           // Replace escaped quotes with single quotes
-        .replace(/\s+/g, ' ')           // Collapse whitespace
-        .replace(/([{,])\s*(\w+)\s*:/g, '$1"$2":'); // Quote unquoted keys
-      
-      evaluation = JSON.parse(cleanJson);
+    } catch {
+      // Aggressive cleanup for stubborn cases
+      const aggressiveClean = cleanJson
+        .replace(/\\"/g, "'")
+        .replace(/\s+/g, ' ')
+        .replace(/([{,])\s*(\w+)\s*:/g, '$1"$2":');
+      evaluation = JSON.parse(aggressiveClean);
     }
-    
-    console.log('Evaluation parsed successfully, score:', evaluation.overallScore);
-    
-    // Validate and sanitize the evaluation - ensure arrays are arrays
+
+    // Ensure arrays and clamp score
     const ensureArray = (val: unknown): string[] => {
       if (Array.isArray(val)) return val.map(String);
       if (typeof val === 'string') return [val];
       return [];
     };
-    
+
     return {
       overallScore: Math.min(10, Math.max(1, Number(evaluation.overallScore) || 5)),
       strengths: ensureArray(evaluation.strengths).length > 0 
@@ -127,62 +106,44 @@ Be specific, constructive, and encouraging. Focus on actionable feedback.`;
       codeReview: String(evaluation.codeReview || 'Code submitted for review.'),
     };
   } catch (error) {
-    console.error('=== LLM EVALUATION ERROR ===');
-    console.error('Error type:', error instanceof Error ? error.constructor.name : typeof error);
-    console.error('Error message:', error instanceof Error ? error.message : String(error));
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
-    
-    // Return default evaluation on error
+    console.error('LLM evaluation error:', error);
+    // Fallback evaluation on error
     return {
       overallScore: 5,
       strengths: ['You attempted the problem'],
-      improvements: ['Unable to generate detailed feedback due to an error'],
+      improvements: ['Unable to generate detailed feedback'],
       missingEdgeCases: [],
-      nextSteps: ['Try again with a new interview session'],
+      nextSteps: ['Try again with a new session'],
       codeReview: 'Evaluation could not be completed.',
     };
   }
 }
 
+/** Generates a system prompt for the interviewer with a random problem. */
 export async function generateInterviewerPrompt(): Promise<string> {
-  // Expanded problem pool with varying difficulty
   const problems = [
     { name: 'Two Sum', difficulty: 'Easy', description: 'Find two numbers in an array that add up to a target' },
     { name: 'Reverse String', difficulty: 'Easy', description: 'Reverse a string in-place' },
     { name: 'Valid Parentheses', difficulty: 'Easy', description: 'Check if brackets are balanced and properly nested' },
     { name: 'Palindrome Check', difficulty: 'Easy', description: 'Determine if a string reads the same forwards and backwards' },
-    { name: 'FizzBuzz', difficulty: 'Easy', description: 'Print numbers 1-100 with Fizz/Buzz/FizzBuzz substitutions' },
+    { name: 'FizzBuzz', difficulty: 'Easy', description: 'Print numbers 1-100 with Fizz/Buzz substitutions' },
     { name: 'Merge Two Sorted Arrays', difficulty: 'Easy', description: 'Combine two sorted arrays into one sorted array' },
-    { name: 'Find Maximum Subarray', difficulty: 'Medium', description: 'Find the contiguous subarray with the largest sum (Kadane\'s algorithm)' },
+    { name: 'Find Maximum Subarray', difficulty: 'Medium', description: 'Find the contiguous subarray with the largest sum' },
     { name: 'Binary Search', difficulty: 'Easy', description: 'Implement binary search on a sorted array' },
-    { name: 'Remove Duplicates from Sorted Array', difficulty: 'Easy', description: 'Remove duplicates in-place from a sorted array' },
-    { name: 'Linked List Cycle Detection', difficulty: 'Medium', description: 'Detect if a linked list has a cycle using Floyd\'s algorithm' },
   ];
 
-  // Randomly select a problem
-  const selectedProblem = problems[Math.floor(Math.random() * problems.length)];
+  const selected = problems[Math.floor(Math.random() * problems.length)];
 
-  return `You are Sarah, an experienced and friendly technical interviewer conducting a coding interview. Your goal is to help the candidate demonstrate their problem-solving skills.
+  return `You are Sarah, an experienced and friendly technical interviewer.
 
-Your responsibilities:
-1. Start by introducing yourself briefly and explaining the interview format
-2. Present this specific coding problem: "${selectedProblem.name}" (${selectedProblem.difficulty}) - ${selectedProblem.description}
-3. Let the candidate think and ask clarifying questions
-4. Encourage them to think out loud
-5. Ask follow-up questions about:
-   - Time and space complexity
-   - Edge cases they're considering
-   - Alternative approaches
-6. Provide hints if they're stuck (but don't give away the answer)
-7. Be encouraging and supportive
-8. When done, thank them and let them know the interview is complete
+Present this problem: "${selected.name}" (${selected.difficulty}) - ${selected.description}
 
-Remember:
-- Keep responses conversational and natural
-- Don't overwhelm with too many questions at once
-- Acknowledge good thinking and solutions
-- Be patient and give them time to think
-- Keep your responses concise (2-3 sentences max)
+Guidelines:
+- Be encouraging and supportive
+- Ask about time/space complexity and edge cases
+- Provide hints if stuck, but never give answers
+- Keep responses to 2-3 sentences max
+- Let the candidate think out loud
 
 Start by greeting the candidate.`;
 }

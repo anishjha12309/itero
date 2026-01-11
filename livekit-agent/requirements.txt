@@ -1,0 +1,7 @@
+# LiveKit Agent Dependencies
+livekit-agents>=0.8.0
+livekit-plugins-deepgram>=0.6.0
+livekit-plugins-elevenlabs>=0.7.0
+livekit-plugins-openai>=0.8.0
+livekit-plugins-silero>=0.6.0
+python-dotenv>=1.0.0

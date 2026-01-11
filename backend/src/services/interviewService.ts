@@ -1,85 +1,72 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Interview, IInterview } from '../models/Interview';
-import { createVapiAssistant, deleteVapiAssistant } from './vapiService';
+import { createLiveKitRoom } from './livekitService';
 import { evaluateInterview } from './llmService';
-
 import { redis } from '../config/redis';
 
 interface StartInterviewResult {
   sessionId: string;
-  assistantId: string;
+  livekitToken: string;
+  livekitUrl: string;
+  roomName: string;
 }
 
+/**
+ * Creates a new interview session with LiveKit room and MongoDB record.
+ * Returns credentials for the frontend to join the voice room.
+ */
 export async function startNewInterview(): Promise<StartInterviewResult> {
-  console.log('startNewInterview: Starting...');
   const sessionId = uuidv4();
-  console.log('startNewInterview: Session ID:', sessionId);
 
-  // Create Vapi assistant for this session
-  console.log('startNewInterview: Creating Vapi assistant...');
-  let assistant;
+  // Create LiveKit room - this is where the AI agent will join
+  const livekit = await createLiveKitRoom(sessionId);
+
+  // Persist interview record
+  const interview = new Interview({
+    sessionId,
+    status: 'active',
+    code: '',
+    language: 'javascript',
+    transcript: [],
+    questions: [],
+    startedAt: new Date(),
+  });
+  await interview.save();
+
+  // Cache room name for quick lookup (2hr TTL matches session max)
   try {
-    assistant = await createVapiAssistant(sessionId);
-    console.log('startNewInterview: Vapi assistant created:', assistant.id);
-  } catch (error) {
-    console.error('startNewInterview: Vapi error:', error);
-    throw error;
+    await redis.set(`interview:${sessionId}:room`, livekit.roomName, 'EX', 7200);
+  } catch {
+    // Redis is optional - continue without caching
   }
 
-  // Create interview record in database
-  console.log('startNewInterview: Creating interview record...');
-  try {
-    const interview = new Interview({
-      sessionId,
-      status: 'active',
-      code: '',
-      language: 'javascript',
-      transcript: [],
-      questions: [],
-      startedAt: new Date(),
-    });
-
-    await interview.save();
-    console.log('startNewInterview: Interview saved to MongoDB');
-  } catch (error) {
-    console.error('startNewInterview: MongoDB error:', error);
-    throw error;
-  }
-
-  // Store assistant ID in Redis for quick lookup
-  try {
-    await redis.set(`interview:${sessionId}:assistant`, assistant.id, 'EX', 7200);
-    console.log('startNewInterview: Assistant ID stored in Redis');
-  } catch (error) {
-    console.error('startNewInterview: Redis error:', error);
-    // Don't throw - Redis is optional
-  }
-
-  console.log('startNewInterview: Success!');
   return {
     sessionId,
-    assistantId: assistant.id,
+    livekitToken: livekit.token,
+    livekitUrl: livekit.url,
+    roomName: livekit.roomName,
   };
 }
 
+/** Updates the candidate's code during an active session. */
 export async function updateInterviewCode(sessionId: string, code: string): Promise<void> {
-  await Interview.findOneAndUpdate(
-    { sessionId },
-    { code },
-    { new: true }
-  );
+  await Interview.findOneAndUpdate({ sessionId }, { code }, { new: true });
 }
 
+/**
+ * Ends the interview, triggers LLM evaluation, and returns results.
+ * Extracts questions from transcript for evaluation context.
+ */
 export async function endInterviewSession(
   sessionId: string,
   code: string,
   transcript: Array<{ role: string; content: string; timestamp: Date }>
 ): Promise<IInterview | null> {
-  // Extract questions from the transcript (agent messages that contain question marks)
+  // Extract agent questions for evaluation context
   const questions = transcript
     .filter((t) => t.role === 'agent' && t.content.includes('?'))
     .map((t) => t.content)
-    .slice(0, 5); // Limit to first 5 questions
+    .slice(0, 5);
 
   const interview = await Interview.findOneAndUpdate(
     { sessionId },
@@ -97,29 +84,23 @@ export async function endInterviewSession(
     { new: true }
   );
 
-  // Clean up Vapi assistant
+  // Cleanup Redis cache
   try {
-    const assistantId = await redis.get(`interview:${sessionId}:assistant`);
-    if (assistantId) {
-      await deleteVapiAssistant(assistantId);
-      await redis.del(`interview:${sessionId}:assistant`);
-    }
-  } catch (error) {
-    console.error('Error cleaning up Vapi assistant:', error);
+    await redis.del(`interview:${sessionId}:room`);
+  } catch {
+    // Non-critical
   }
 
-  // Trigger LLM evaluation
+  // Async evaluation - don't block the response
   if (interview) {
     try {
-      console.log('Triggering LLM evaluation for session:', sessionId);
       const evaluation = await evaluateInterview(interview);
       interview.evaluation = evaluation;
       interview.status = 'evaluated';
       await interview.save();
-      console.log('Evaluation complete for session:', sessionId);
     } catch (error) {
-      console.error('Failed to evaluate interview:', error);
-      // Continue - interview is still saved, evaluation can be retried
+      console.error('Evaluation failed:', error);
+      // Interview saved, evaluation can be retried
     }
   }
 
